@@ -1,0 +1,19 @@
+{
+    "config_1": {
+        "server": {
+            "uri": "http://localhost:5984/private1_vault",
+            "auth": {
+                "username": "username_of_private_vault",
+                "password": "password_of_private_vault",
+                "passphrase": "passphrase_of_private_vault"
+            },
+            "path": "shared/"
+        },
+        "local": {
+            "path": "./export",
+            "processor": "utils/build.sh",
+            "initialScan": false
+        },
+        "auto_reconnect": true
+    }
+}
