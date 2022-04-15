@@ -14,6 +14,7 @@ export interface config {
         passphrase: string;
     };
     path: string;
+    initialScan: boolean;
 }
 export interface localConfig {
     path: string;
@@ -25,6 +26,7 @@ export interface eachConf {
     server: config;
     local: localConfig;
     auto_reconnect?: boolean;
+    sync_on_connect: boolean;
 }
 
 export interface configFile {
@@ -90,4 +92,10 @@ export interface PlainEntry {
 export type LoadedEntry = Entry & {
     children: string[];
     datatype: "plain" | "newnote";
+};
+
+export type TransferEntry = PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta> & {
+    children?: string[];
+    type?: string;
+    mtime?: number;
 };
