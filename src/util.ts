@@ -25,13 +25,29 @@ export function isKnownFile(syncKey: string, id: string, rev: string) {
     return known_files.indexOf(`${syncKey}-${id}-${rev}`) !== -1;
 }
 export function addTouchedFile(pathSrc: string, mtime: number) {
+    const rmtime = ~~(mtime / 5000);
     const targetFile = path.resolve(pathSrc);
-    const key = `${targetFile}-${~~(mtime / 10)}`;
+    const key = `${targetFile}-${rmtime}`;
     touchedFile.push(key);
     touchedFile = touchedFile.slice(-50);
 }
 export function isTouchedFile(pathSrc: string, mtime: number) {
+    const rmtime = ~~(mtime / 5000);
     const targetFile = path.resolve(pathSrc);
-    const key = `${targetFile}-${~~(mtime / 10)}`;
+    const key = `${targetFile}-${rmtime}`;
     return touchedFile.indexOf(key) !== -1;
+}
+
+export const DATEDIFF_NEWER_A = 1;
+export const DATEDIFF_OLDER_B = 1;
+export const DATEDIFF_EVEN = 0;
+export const DATEDIFF_OLDER_A = -1;
+export const DATEDIFF_NEWER_B = -1;
+export type DATEDIFF = 1 | 0 | -1;
+export function calcDateDiff(a: number | Date, b: number | Date, resolution = 1000): DATEDIFF {
+    const da = ~~((typeof a == "number" ? a : a.getTime()) / resolution);
+    const db = ~~((typeof b == "number" ? b : b.getTime()) / resolution);
+    if (da == db) return DATEDIFF_EVEN;
+    const diff = (da - db) / Math.abs(da - db);
+    return diff as DATEDIFF;
 }

@@ -1,16 +1,18 @@
-import { decrypt, encrypt } from "./e2ee.js";
 import chokidar from "chokidar";
-//@ts-ignore
-import { PouchDB as PouchDB_src } from "./pouchdb.js";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as util from "util";
 import { exec } from "child_process";
+import { Stats } from "fs";
 
 import { Logger } from "./logger.js";
-import { configFile, connectConfig, eachConf, Entry, EntryLeaf, LoadedEntry, LOG_LEVEL, MAX_DOC_SIZE, MAX_DOC_SIZE_BIN, NewEntry, PlainEntry } from "./types.js";
-import { Stats } from "fs";
-import { addTouchedFile, isKnownFile, isPlainText, isTouchedFile, path2unix } from "./util.js";
+
+//@ts-ignore
+import { PouchDB as PouchDB_src } from "./pouchdb.js";
+
+import { decrypt, encrypt } from "./e2ee.js";
+import { configFile, connectConfig, eachConf, Entry, EntryLeaf, LoadedEntry, LOG_LEVEL, MAX_DOC_SIZE, MAX_DOC_SIZE_BIN, NewEntry, PlainEntry, TransferEntry } from "./types.js";
+import { addKnownFile, addTouchedFile, calcDateDiff, DATEDIFF_EVEN, DATEDIFF_NEWER_A, DATEDIFF_OLDER_A, isKnownFile, isPlainText, isTouchedFile, path2unix } from "./util.js";
 
 const xxhash = require("xxhash-wasm");
 
@@ -77,25 +79,6 @@ function triggerProcessor(procs: string) {
     processorTimer = setTimeout(() => {
         runEngine();
     }, 500);
-}
-
-async function main() {
-    log("LiveSync-classroom starting up.");
-    let xx = await xxhash();
-    h32Raw = xx.h32Raw;
-    h32 = xx.h32ToString;
-    let config: configFile = JSON.parse((await fs.readFile("./dat/config.json")) + "");
-
-    try {
-        syncStat = JSON.parse((await fs.readFile(statFile)) + "");
-    } catch (ex) {
-        log("could not read pervious sync status, initialized.");
-        syncStat = {};
-    }
-
-    for (const conf of Object.entries(config)) {
-        setTimeout(() => eachProc(conf[0], conf[1]), 100);
-    }
 }
 
 let hashCache: {
@@ -171,11 +154,9 @@ async function putDBEntry(note: LoadedEntry, passphrase: string, database: Pouch
         let leafid = "";
         // Get hash of piece.
         let hashedPiece = "";
-        let needMake = true;
         if (typeof hashCache[piece] !== "undefined") {
             hashedPiece = "";
             leafid = hashCache[piece];
-            needMake = false;
             skiped++;
             cacheUsed++;
         } else {
@@ -251,12 +232,15 @@ async function putDBEntry(note: LoadedEntry, passphrase: string, database: Pouch
                 throw ex;
             }
         }
-        const r = await database.put(newDoc, { force: true });
-        Logger(`note saved:${newDoc._id}:${r.rev}`);
+        const ret = await database.put(newDoc, { force: true });
+        Logger(`note saved:${newDoc._id}:${ret.rev}`);
+        return ret;
     } else {
         Logger(`note coud not saved:${note._id}`);
     }
 }
+
+// Run synchronization for each config
 async function eachProc(syncKey: string, config: eachConf) {
     log(`${syncKey} started`);
 
@@ -286,7 +270,6 @@ async function eachProc(syncKey: string, config: eachConf) {
         log(ex);
         process.exit(-1);
     }
-    log("Start Database watching");
 
     function openConnection(e: connectConfig, auto_reconnect: boolean) {
         Logger(`Connecting ${e.syncKey} with auto_reconnect:${auto_reconnect}`);
@@ -301,7 +284,7 @@ async function eachProc(syncKey: string, config: eachConf) {
                 },
             })
             .on("change", async function (change) {
-                if (change.doc?._id.startsWith(e.fromPrefix) && isVaildDoc(change.doc._id)) {
+                if (change.doc?._id.indexOf(":") == -1 && change.doc?._id.startsWith(e.fromPrefix) && isVaildDoc(change.doc._id)) {
                     let x = await transferDoc(e.syncKey, e.fromDB, change.doc, e.fromPrefix, e.passphrase, exportPath);
                     if (x) {
                         syncStat[syncKey] = change.seq + "";
@@ -333,25 +316,38 @@ async function eachProc(syncKey: string, config: eachConf) {
     }
 
     log("start vault watching");
-    const watcher = chokidar.watch(config.local.path, { ignoreInitial: !config.local.initialScan });
-    const vaultPath = path.posix.normalize(config.local.path);
 
-    const db_add = async (pathSrc: string, stat: Stats) => {
-        const id = serverPath + path2unix(path.relative(path.resolve(vaultPath), path.resolve(pathSrc)));
+    const storagePathRoot = path.resolve(config.local.path);
+    let conf: connectConfig = {
+        syncKey: syncKey,
+        fromDB: remote,
+        fromPrefix: serverPath,
+        passphrase: serverAuth.passphrase,
+    };
+
+    function storagePathToVaultPath(strStoragePath: string) {
+        const rel = path.relative(storagePathRoot, strStoragePath);
+        return path2unix(rel);
+    }
+    function vaultPathToStroageABSPath(strVaultPath: string) {
+        const filePath = path.resolve(path.join(storagePathRoot, strVaultPath));
+        return filePath;
+    }
+
+    const pushFile = async (pathSrc: string, stat: Stats) => {
+        const id = serverPath + storagePathToVaultPath(pathSrc);
         const docId = id.startsWith("_") ? "/" + id : id;
         try {
             let doc = (await remote.get(docId)) as NewEntry;
             if (doc.mtime) {
-                const mtime_srv = ~~(doc.mtime / 1000);
-                const mtime_loc = ~~(stat.mtime.getTime() / 1000);
-                if (mtime_loc == mtime_srv) {
-                    log(`Should be not modified on ${pathSrc}`);
+                if (calcDateDiff(doc.mtime, stat.mtime) == DATEDIFF_EVEN) {
                     return;
                 }
             }
         } catch (ex: any) {
             if (ex.status && ex.status == 404) {
                 // NO OP.
+                log(`${id} -> maybe new`);
             } else {
                 throw ex;
             }
@@ -360,8 +356,6 @@ async function eachProc(syncKey: string, config: eachConf) {
         let datatype: "newnote" | "plain" = "newnote";
         const d = await fs.readFile(pathSrc);
         if (!isPlainText(pathSrc)) {
-            // const contentBin = await this.app.vault.readBinary(file);
-            // content = await arrayBufferToBase64(contentBin);
             content = d.toString("base64");
             datatype = "newnote";
         } else {
@@ -378,15 +372,20 @@ async function eachProc(syncKey: string, config: eachConf) {
             data: content,
             // type: "plain",
         };
-        await putDBEntry(newNote, conf.passphrase, remote as PouchDB.Database<NewEntry | PlainEntry | Entry | EntryLeaf>);
+        let ret = await putDBEntry(newNote, conf.passphrase, remote as PouchDB.Database<NewEntry | PlainEntry | Entry | EntryLeaf>);
+        if (ret) {
+            addTouchedFile(pathSrc, 0);
+            addKnownFile(conf.syncKey, ret.id, ret.rev);
+        }
     };
-    const db_delete = async (pathSrc: string) => {
-        const id = serverPath + path2unix(path.relative(path.resolve(vaultPath), path.resolve(pathSrc)));
+    const unlinkFile = async (pathSrc: string) => {
+        const id = serverPath + storagePathToVaultPath(pathSrc);
         const docId = id.startsWith("_") ? "/" + id : id;
         try {
             let oldNote: any = await remote.get(docId);
             oldNote._deleted = true;
-            await remote.put(oldNote);
+            let ret = await remote.put(oldNote);
+            addKnownFile(conf.syncKey, ret.id, ret.rev);
             addTouchedFile(pathSrc, 0);
         } catch (ex: any) {
             if (ex.status && ex.status == 404) {
@@ -396,44 +395,115 @@ async function eachProc(syncKey: string, config: eachConf) {
             }
         }
     };
+    // check the document is under the [vault]/[configured_dir]..
+    function isTargetFile(pathSrc: string): boolean {
+        if (pathSrc.startsWith(config.server.path)) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+    async function pullFile(id: string, localPath: string) {
+        let fromDoc = await remote.get(id);
+        const docName = fromDoc._id.substring(config.server.path.length);
+        let sendDoc: PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta> & { children?: string[]; type?: string; mtime?: number } = { ...fromDoc, _id: docName.startsWith("_") ? "/" + docName : docName };
+        if (await exportDoc(sendDoc, docName, serverAuth.passphrase, remote, exportPath)) {
+            log(`Pull:${localPath}`);
+        } else {
+            log(`Failed:${localPath}`);
+        }
+    }
+
+    if (config.sync_on_connect || config.server.initialScan) {
+        const dbfiles = await remote.find({ limit: 999999999, selector: { $or: [{ type: "plain" }, { type: "newnote" }] }, fields: ["_id", "mtime"] });
+
+        log(`Waiting for initial sync(Database to storage)`);
+        if (dbfiles.docs) {
+            for (const doc of dbfiles.docs) {
+                if (doc._id.indexOf(":") !== -1) continue;
+                const fn = doc._id.startsWith("/") ? doc._id.substring(1) : doc._id;
+                if (!isTargetFile(fn)) {
+                    continue;
+                }
+
+                const localPath = fn.substring(config.server.path.length);
+                const storageNewFilePath = vaultPathToStroageABSPath(localPath);
+                // log(`Checking initial file:${localPath}`);
+                // log(`--> file:${storageNewFilePath}`);
+                const mtime: number = (doc as any).mtime;
+                try {
+                    const stat = await fs.stat(storageNewFilePath);
+                    const diff = calcDateDiff(stat.mtime, mtime);
+
+                    if (diff == DATEDIFF_NEWER_A) {
+                        log(`--> ${localPath}`);
+                        await pushFile(storageNewFilePath, stat);
+                        // return;
+                    } else if (diff == DATEDIFF_OLDER_A) {
+                        log(`<-- ${localPath}`);
+                        await pullFile(doc._id, localPath);
+                    } else {
+                        log(`=== ${localPath}`);
+                    }
+                } catch (ex: any) {
+                    if (ex.code == "ENOENT") {
+                        log(`<<- ${localPath}`);
+                        await pullFile(doc._id, localPath);
+                        // return;
+                        continue;
+                    }
+
+                    log(`Error on checking file:${localPath}`);
+                    log(`Error:${ex}`);
+                }
+            }
+            log(`Done!`);
+        }
+    }
+
+    const watcher = chokidar.watch(config.local.path, {
+        ignoreInitial: !config.local.initialScan && !config.sync_on_connect,
+        awaitWriteFinish: {
+            stabilityThreshold: 500,
+        },
+    });
+
     watcher.on("change", async (pathSrc: string, stat: Stats) => {
         const filePath = pathSrc;
-        log(`Detected:change:${filePath}`);
-        const mtime = ~~(stat.mtime.getTime() / 1000);
+
+        const mtime = stat.mtime.getTime();
         if (isTouchedFile(filePath, mtime)) {
-            log("Self-detect");
+            // log(`Self-detected::${filePath}`);
             return;
         }
+        log(`Detected:change:${filePath}`);
         addTouchedFile(pathSrc, mtime);
-        await db_add(pathSrc, stat);
+        await pushFile(pathSrc, stat);
     });
     watcher.on("unlink", async (pathSrc: string, stat: Stats) => {
         const filePath = pathSrc;
-        log(`Detected:delete:${filePath}`);
+
         if (isTouchedFile(filePath, 0)) {
-            log("self-detect");
+            // log(`Self-detected::${filePath}`);
+            return;
         }
-        await db_delete(pathSrc);
+        log(`Detected:delete:${filePath}`);
+        await unlinkFile(pathSrc);
     });
     watcher.on("add", async (pathSrc: string, stat: Stats) => {
         const filePath = pathSrc;
-        log(`Detected:created:${filePath}`);
-        const mtime = ~~(stat.mtime.getTime() / 1000);
+        const mtime = stat.mtime.getTime();
         if (isTouchedFile(filePath, mtime)) {
-            log("Self-detect");
+            // log(`Self-detected::${filePath}`);
             return;
         }
+        log(`Detected:created:${filePath}`);
         addTouchedFile(pathSrc, mtime);
-        await db_add(pathSrc, stat);
+        await pushFile(pathSrc, stat);
 
         // this.watchVaultChange(path, stat);
     });
-    let conf: connectConfig = {
-        syncKey: syncKey,
-        fromDB: remote,
-        fromPrefix: serverPath,
-        passphrase: serverAuth.passphrase,
-    };
+    log("Start Database watching");
     openConnection(conf, config.auto_reconnect ?? false);
 }
 
@@ -448,6 +518,82 @@ function isVaildDoc(id: string): boolean {
     return true;
 }
 
+async function exportDoc(sendDoc: TransferEntry, docName: string, passphrase: string, db: PouchDB.Database, exportPath: string) {
+    const writePath = path.join(exportPath, docName);
+    if (sendDoc._deleted) {
+        log(`doc:${docName}: Deleted, so delete from ${writePath}`);
+        try {
+            addTouchedFile(writePath, 0);
+            await fs.unlink(writePath);
+        } catch (ex: any) {
+            if (ex.code == "ENOENT") {
+                //NO OP
+            } else {
+                throw ex;
+            }
+        }
+        return true;
+    }
+    if (!sendDoc.children) {
+        log(`doc:${docName}: Warning! document doesn't have chunks, skipped`);
+        return false;
+    }
+    try {
+        const stat_init = await fs.stat(writePath);
+        const mtime = sendDoc.mtime ?? new Date().getTime();
+        const diff = calcDateDiff(mtime, stat_init.mtime);
+        if (diff == DATEDIFF_EVEN) {
+            log(`doc:${docName}: Up to date`);
+            return true;
+        }
+    } catch (ex) {
+        // WRAP IT
+        log(ex);
+    }
+    let cx = sendDoc.children;
+    let children = await getChildren(cx, db);
+
+    if (children.includes(undefined)) {
+        log(`doc:${docName}: Warning! there's missing chunks, skipped`);
+        return false;
+    }
+
+    children = children.filter((e) => !!e);
+    for (const v of children) {
+        delete (v as any)?._rev;
+    }
+
+    let decrypted_children =
+        passphrase == ""
+            ? children
+            : (
+                  await Promise.allSettled(
+                      children.map(async (e: any) => {
+                          e.data = await decrypt(e.data, passphrase);
+                          return e;
+                      })
+                  )
+              ).map((e) => (e.status == "fulfilled" ? e.value : null));
+    const dirName = path.dirname(writePath);
+    log(`doc:${docName}: Exporting to ${writePath}`);
+    await fs.mkdir(dirName, { recursive: true });
+    const dt_plain = decrypted_children.map((e) => e.data).join("");
+    const mtime = sendDoc.mtime ?? new Date().getTime();
+
+    addTouchedFile(writePath, mtime);
+
+    const tmtime = ~~(mtime / 1000);
+    if (sendDoc.type == "plain") {
+        await fs.writeFile(writePath, dt_plain);
+        await fs.utimes(writePath, tmtime, tmtime);
+    } else {
+        const dt_bin = Buffer.from(dt_plain, "base64");
+        await fs.writeFile(writePath, dt_bin, { encoding: "binary" });
+        await fs.utimes(writePath, tmtime, tmtime);
+    }
+    log(`doc:${docName}: Exported`);
+    return true;
+}
 async function transferDoc(syncKey: string, fromDB: PouchDB.Database, fromDoc: PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta>, fromPrefix: string, passphrase: string, exportPath: string): Promise<boolean> {
     const docKey = `${syncKey}: ${fromDoc._id} (${fromDoc._rev})`;
     while (running[syncKey]) {
@@ -464,7 +610,6 @@ async function transferDoc(syncKey: string, fromDB: PouchDB.Database, fromDoc: P
             const docName = fromDoc._id.substring(fromPrefix.length);
             let sendDoc: PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta> & { children?: string[]; type?: string; mtime?: number } = { ...fromDoc, _id: docName.startsWith("_") ? "/" + docName : docName };
             let retry = false;
-            const userpasswordHash = h32Raw(new TextEncoder().encode(passphrase));
             do {
                 if (retry) {
                     continue_count--;
@@ -474,60 +619,7 @@ async function transferDoc(syncKey: string, fromDB: PouchDB.Database, fromDoc: P
                     }
                     await delay(1500);
                 }
-                if (sendDoc._deleted && exportPath != "") {
-                    const writePath = path.join(exportPath, docName);
-                    log(`doc:${docKey}: Deleted, so delete from ${writePath}`);
-                    addTouchedFile(writePath, 0);
-                    await fs.unlink(writePath);
-                }
-                retry = false;
-                if (!sendDoc.children) {
-                    log(`doc:${docKey}: Warning! document doesn't have chunks, skipped`);
-                    return false;
-                }
-                let cx = sendDoc.children;
-                let children = await getChildren(cx, fromDB);
-
-                if (children.includes(undefined)) {
-                    log(`doc:${docKey}: Warning! there's missing chunks, skipped`);
-                    return false;
-                } else {
-                    children = children.filter((e) => !!e);
-                    for (const v of children) {
-                        delete (v as any)?._rev;
-                    }
-
-                    let decrypted_children =
-                        passphrase == ""
-                            ? children
-                            : (
-                                  await Promise.allSettled(
-                                      children.map(async (e: any) => {
-                                          e.data = await decrypt(e.data, passphrase);
-                                          return e;
-                                      })
-                                  )
-                              ).map((e) => (e.status == "fulfilled" ? e.value : null));
-                    // If exporting is enabled, write contents to the real file.
-                    if (exportPath != "" && !sendDoc._deleted) {
-                        const writePath = path.join(exportPath, docName);
-                        const dirName = path.dirname(writePath);
-                        log(`doc:${docKey}: Exporting to ${writePath}`);
-                        await fs.mkdir(dirName, { recursive: true });
-                        const dt_plain = decrypted_children.map((e) => e.data).join("");
-                        const mtime = sendDoc.mtime ?? new Date().getTime();
-                        const tmtime = ~~(mtime / 1000);
-                        addTouchedFile(writePath, tmtime);
-                        if (sendDoc.type == "plain") {
-                            await fs.writeFile(writePath, dt_plain);
-                            await fs.utimes(writePath, tmtime, tmtime);
-                        } else {
-                            const dt_bin = Buffer.from(dt_plain, "base64");
-                            await fs.writeFile(writePath, dt_bin, { encoding: "binary" });
-                            await fs.utimes(writePath, tmtime, tmtime);
-                        }
-                    }
-                }
+                retry = !(await exportDoc(sendDoc, docName, passphrase, fromDB, exportPath));
             } while (retry);
         } catch (ex) {
             log("Exception on transfer doc");
@@ -537,6 +629,26 @@ async function transferDoc(syncKey: string, fromDB: PouchDB.Database, fromDoc: P
         running[syncKey] = false;
     }
     return false;
+}
+
+async function main() {
+    log("FileSystem-Livesync starting up.");
+    let xx = await xxhash();
+    h32Raw = xx.h32Raw;
+    h32 = xx.h32ToString;
+    let config: configFile = JSON.parse((await fs.readFile("./dat/config.json")) + "");
+
+    try {
+        syncStat = JSON.parse((await fs.readFile(statFile)) + "");
+    } catch (ex) {
+        log("could not read pervious sync status, initialized.");
+        syncStat = {};
+    }
+
+    // Run each processes
+    for (const conf of Object.entries(config)) {
+        setTimeout(() => eachProc(conf[0], conf[1]), 100);
+    }
 }
 
 main().then((_) => {});

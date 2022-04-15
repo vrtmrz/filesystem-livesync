@@ -1,6 +1,17 @@
 import { Logger } from "./logger";
 import { LOG_LEVEL } from "./types";
-import { webcrypto as crypto } from "crypto";
+import { webcrypto as crypto_ } from "crypto";
+
+let webcrypto: Crypto;
+
+if (typeof window !== "undefined" && window.crypto) {
+    webcrypto = window.crypto;
+} else {
+    const crypto = crypto_;
+    //@ts-ignore
+    webcrypto = crypto;
+}
+console.dir(webcrypto);
 
 export type encodedData = [encryptedData: string, iv: string, salt: string];
 export type KeyBuffer = {
@@ -30,10 +41,10 @@ export async function getKeyForEncrypt(passphrase: string): Promise<[CryptoKey, 
         recycleCount = KEY_RECYCLE_COUNT;
     }
     const xpassphrase = new TextEncoder().encode(passphrase);
-    const digest = await crypto.subtle.digest({ name: "SHA-256" }, xpassphrase);
-    const keyMaterial = await crypto.subtle.importKey("raw", digest, { name: "PBKDF2" }, false, ["deriveKey"]);
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const key = await crypto.subtle.deriveKey(
+    const digest = await webcrypto.subtle.digest({ name: "SHA-256" }, xpassphrase);
+    const keyMaterial = await webcrypto.subtle.importKey("raw", digest, { name: "PBKDF2" }, false, ["deriveKey"]);
+    const salt = webcrypto.getRandomValues(new Uint8Array(16));
+    const key = await webcrypto.subtle.deriveKey(
         {
             name: "PBKDF2",
             salt,
@@ -63,9 +74,9 @@ export async function getKeyForDecryption(passphrase: string, salt: Uint8Array):
         return [f.key, f.salt];
     }
     const xpassphrase = new TextEncoder().encode(passphrase);
-    const digest = await crypto.subtle.digest({ name: "SHA-256" }, xpassphrase);
-    const keyMaterial = await crypto.subtle.importKey("raw", digest, { name: "PBKDF2" }, false, ["deriveKey"]);
-    const key = await crypto.subtle.deriveKey(
+    const digest = await webcrypto.subtle.digest({ name: "SHA-256" }, xpassphrase);
+    const keyMaterial = await webcrypto.subtle.importKey("raw", digest, { name: "PBKDF2" }, false, ["deriveKey"]);
+    const key = await webcrypto.subtle.deriveKey(
         {
             name: "PBKDF2",
             salt,
@@ -93,7 +104,7 @@ function getSemiStaticField(reset?: boolean) {
     if (semiStaticFieldBuffer != null && !reset) {
         return semiStaticFieldBuffer;
     }
-    semiStaticFieldBuffer = crypto.getRandomValues(new Uint8Array(12));
+    semiStaticFieldBuffer = webcrypto.getRandomValues(new Uint8Array(12));
     return semiStaticFieldBuffer;
 }
 
@@ -132,7 +143,7 @@ export async function encrypt(input: string, passphrase: string) {
     const iv = Uint8Array.from([...fixedPart, ...new Uint8Array(invocationPart.buffer)]);
     const plainStringified: string = JSON.stringify(input);
     const plainStringBuffer: Uint8Array = new TextEncoder().encode(plainStringified);
-    const encryptedDataArrayBuffer = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plainStringBuffer);
+    const encryptedDataArrayBuffer = await webcrypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plainStringBuffer);
 
     const encryptedData = btoa(Array.from(new Uint8Array(encryptedDataArrayBuffer), (char) => String.fromCharCode(char)).join(""));
 
@@ -150,7 +161,7 @@ export async function decrypt(encryptedResult: string, passphrase: string): Prom
         // decode base 64, it should increase speed and i should with in MAX_DOC_SIZE_BIN, so it won't OOM.
         const encryptedDataBin = atob(encryptedData);
         const encryptedDataArrayBuffer = Uint8Array.from(encryptedDataBin.split(""), (char) => char.charCodeAt(0));
-        const plainStringBuffer: ArrayBuffer = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encryptedDataArrayBuffer);
+        const plainStringBuffer: ArrayBuffer = await webcrypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encryptedDataArrayBuffer);
         const plainStringified = new TextDecoder().decode(plainStringBuffer);
         const plain = JSON.parse(plainStringified);
         return plain;
