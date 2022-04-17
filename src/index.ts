@@ -246,7 +246,7 @@ async function eachProc(syncKey: string, config: eachConf) {
 
     const serverURI = config.server.uri;
     const serverAuth = config.server.auth;
-    const serverPath = config.server.path;
+    const serverPath = config.server.path ?? "";
 
     const exportPath = config.local?.path ?? "";
     const processor = config.local?.processor ?? "";
@@ -317,7 +317,7 @@ async function eachProc(syncKey: string, config: eachConf) {
 
     log("start vault watching");
 
-    const storagePathRoot = path.resolve(config.local.path);
+    const storagePathRoot = path.resolve(exportPath);
     let conf: connectConfig = {
         syncKey: syncKey,
         fromDB: remote,
@@ -397,7 +397,7 @@ async function eachProc(syncKey: string, config: eachConf) {
     };
     // check the document is under the [vault]/[configured_dir]..
     function isTargetFile(pathSrc: string): boolean {
-        if (pathSrc.startsWith(config.server.path)) {
+        if (pathSrc.startsWith(serverPath)) {
             return true;
         } else {
             return false;
@@ -405,7 +405,7 @@ async function eachProc(syncKey: string, config: eachConf) {
     }
     async function pullFile(id: string, localPath: string) {
         let fromDoc = await remote.get(id);
-        const docName = fromDoc._id.substring(config.server.path.length);
+        const docName = fromDoc._id.substring(serverPath.length);
         let sendDoc: PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta> & { children?: string[]; type?: string; mtime?: number } = { ...fromDoc, _id: docName.startsWith("_") ? "/" + docName : docName };
         if (await exportDoc(sendDoc, docName, serverAuth.passphrase, remote, exportPath)) {
             log(`Pull:${localPath}`);
@@ -426,7 +426,7 @@ async function eachProc(syncKey: string, config: eachConf) {
                     continue;
                 }
 
-                const localPath = fn.substring(config.server.path.length);
+                const localPath = fn.substring(serverPath.length);
                 const storageNewFilePath = vaultPathToStroageABSPath(localPath);
                 // log(`Checking initial file:${localPath}`);
                 // log(`--> file:${storageNewFilePath}`);
@@ -461,7 +461,7 @@ async function eachProc(syncKey: string, config: eachConf) {
         }
     }
 
-    const watcher = chokidar.watch(config.local.path, {
+    const watcher = chokidar.watch(exportPath, {
         ignoreInitial: !config.local.initialScan && !config.sync_on_connect,
         awaitWriteFinish: {
             stabilityThreshold: 500,
@@ -567,13 +567,13 @@ async function exportDoc(sendDoc: TransferEntry, docName: string, passphrase: st
         passphrase == ""
             ? children
             : (
-                  await Promise.allSettled(
-                      children.map(async (e: any) => {
-                          e.data = await decrypt(e.data, passphrase);
-                          return e;
-                      })
-                  )
-              ).map((e) => (e.status == "fulfilled" ? e.value : null));
+                await Promise.allSettled(
+                    children.map(async (e: any) => {
+                        e.data = await decrypt(e.data, passphrase);
+                        return e;
+                    })
+                )
+            ).map((e) => (e.status == "fulfilled" ? e.value : null));
     const dirName = path.dirname(writePath);
     log(`doc:${docName}: Exporting to ${writePath}`);
     await fs.mkdir(dirName, { recursive: true });
@@ -651,4 +651,4 @@ async function main() {
     }
 }
 
-main().then((_) => {});
+main().then((_) => { });
