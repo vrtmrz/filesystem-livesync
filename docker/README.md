@@ -16,18 +16,18 @@ Assuming a folder at `/tmp/data` was going to store your config and vaults, writ
         "server": {
             "uri": "http://example-uri/private1_vault",
             "auth": {
-                "username": "couch_db_username",
-                "password": "couch_db_password",
-                "passphrase": "passphrase_of_private_vault"
+                "username": "couchdb_username",
+                "password": "couchdb_password",
+                "passphrase": ""
             },
-            "path": "shared/"
+            "initialScan": true 
         },
         "local": {
             "path": "/data/vault1",
-            "processor": "utils/build.sh",
-            "initialScan": false
+            "initialScan": true 
         },
-        "auto_reconnect": true
+        "auto_reconnect": true,
+        "sync_on_connect": true 
     }
 }
 ```
