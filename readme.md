@@ -28,7 +28,7 @@ The configuration file consists of the following structure.
             "auth": {
                 "username": "username_of_private_vault",
                 "password": "password_of_private_vault",
-                "passphrase": "passphrase_of_private_vault" // Required -- leave empty if no passphrase
+                "passphrase": "passphrase_of_private_vault" // Remove if no passphrase is set for your vault
             },
             "path": "shared/", // All documents under this path will synchronized.
             "initialScan": false // If you enable this, all server files will be synchronized to local storage once when daemon has been started.

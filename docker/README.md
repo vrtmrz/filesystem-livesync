@@ -18,7 +18,7 @@ Assuming a folder at `/tmp/data` was going to store your config and vaults, writ
             "auth": {
                 "username": "couchdb_username",
                 "password": "couchdb_password",
-                "passphrase": ""
+                "passphrase": "mypassphrase" // Remove if no passphrase is set for Vault
             },
             "initialScan": true 
         },
