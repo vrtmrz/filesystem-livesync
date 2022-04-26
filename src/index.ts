@@ -169,7 +169,7 @@ async function putDBEntry(note: LoadedEntry, passphrase: string, database: Pouch
             leafid = "h:" + hashedPiece;
 
             //have to make
-            const savePiece = await encrypt(piece, passphrase);
+            const savePiece = passphrase != "" ? await encrypt(piece, passphrase) : piece;
 
             const d: EntryLeaf = {
                 _id: leafid,
