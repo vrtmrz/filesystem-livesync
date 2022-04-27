@@ -37,3 +37,9 @@ Assuming a folder at `/tmp/data` was going to store your config and vaults, writ
 ```
 docker run -it --rm -v /tmp/data:/data filesystem-livesync
 ```
+
+If you would like to be able to edit files from your host running Docker, it is recommended to set the `CHOKIDAR_USEPOLLING` environment variable to equal `1`:
+
+```
+docker run -it --rm -v /tmp/data:/data -e CHOKIDAR_USEPOLLING=1 filesystem-livesync
+```
