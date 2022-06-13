@@ -7,7 +7,7 @@ Notice: **We're on the bleeding edge.** Please make sure to back your vault up!
 ## How to run
 
 ```sh
-git clone https://github.com/vrtmrz/filesystem-livesync
+git clone --recursive https://github.com/vrtmrz/filesystem-livesync
 cp dat/config.sample.json dat/config.json
 # Setting up configuration
 vi dat/config.json
