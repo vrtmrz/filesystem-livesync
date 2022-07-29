@@ -15,6 +15,7 @@ export interface config {
     };
     path: string;
     initialScan: boolean;
+
 }
 export interface localConfig {
     path: string;
@@ -27,6 +28,7 @@ export interface eachConf {
     local: localConfig;
     auto_reconnect?: boolean;
     sync_on_connect: boolean;
+    deleteMetadataOfDeletedFiles?: boolean;
 }
 
 export interface configFile {
@@ -37,65 +39,13 @@ export interface connectConfig {
     fromDB: PouchDB.Database;
     fromPrefix: string;
     passphrase: string;
+    deleteMetadataOfDeletedFiles: boolean;
 }
 
-//---LiveSync's data
-
-export const MAX_DOC_SIZE = 1000; // for .md file, but if delimiters exists. use that before.
-export const MAX_DOC_SIZE_BIN = 102400; // 100kb
-
-export interface EntryLeaf {
-    _id: string;
-    data: string;
-    _deleted?: boolean;
-    type: "leaf";
-    _rev?: string;
-}
-
-export interface Entry {
-    _id: string;
-    data: string;
-    _rev?: string;
-    ctime: number;
-    mtime: number;
-    size: number;
-    _deleted?: boolean;
-    _conflicts?: string[];
-    type?: "notes";
-}
-
-export interface NewEntry {
-    _id: string;
-    children: string[];
-    _rev?: string;
-    ctime: number;
-    mtime: number;
-    size: number;
-    _deleted?: boolean;
-    _conflicts?: string[];
-    NewNote: true;
-    type: "newnote";
-}
-export interface PlainEntry {
-    _id: string;
-    children: string[];
-    _rev?: string;
-    ctime: number;
-    mtime: number;
-    size: number;
-    _deleted?: boolean;
-    NewNote: true;
-    _conflicts?: string[];
-    type: "plain";
-}
-
-export type LoadedEntry = Entry & {
-    children: string[];
-    datatype: "plain" | "newnote";
-};
 
 export type TransferEntry = PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta> & {
     children?: string[];
     type?: string;
     mtime?: number;
+    deleted?: boolean;
 };

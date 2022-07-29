@@ -10,10 +10,11 @@ import { Logger } from "./logger.js";
 //@ts-ignore
 import { PouchDB as PouchDB_src } from "./pouchdb.js";
 
-import { configFile, connectConfig, eachConf, Entry, EntryLeaf, LoadedEntry, LOG_LEVEL, MAX_DOC_SIZE, MAX_DOC_SIZE_BIN, NewEntry, PlainEntry, TransferEntry } from "./types.js";
-import { addKnownFile, addTouchedFile, calcDateDiff, DATEDIFF_EVEN, DATEDIFF_NEWER_A, DATEDIFF_OLDER_A, isKnownFile, isPlainText, isTouchedFile, path2unix } from "./util.js";
-import { enableEncryption, runWithLock, shouldSplitAsPlainText, splitPieces2 } from "./lib/src/utils.js";
-import { EntryDoc } from "./lib/src/types.js";
+import { configFile, connectConfig, eachConf, TransferEntry } from "./types.js";
+import { addKnownFile, addTouchedFile, calcDateDiff, DATEDIFF_EVEN, DATEDIFF_NEWER_A, DATEDIFF_OLDER_A, isKnownFile, isTouchedFile, path2unix } from "./util.js";
+import { enableEncryption, runWithLock, shouldSplitAsPlainText, splitPieces2, isPlainText } from "./lib/src/utils.js";
+import { EntryDoc, Entry, EntryLeaf, LoadedEntry, NewEntry, PlainEntry, LOG_LEVEL, MAX_DOC_SIZE, MAX_DOC_SIZE_BIN, } from "./lib/src/types.js";
+import { LRUCache } from "./lib/src/LRUCache.js";
 
 const xxhash = require("xxhash-wasm");
 
@@ -81,204 +82,9 @@ function triggerProcessor(procs: string) {
         runEngine();
     }, 500);
 }
-class LRUCache {
-    cache = new Map<string, string>([]);
-    revCache = new Map<string, string>([]);
-    maxCache = 100;
-    constructor() {}
-    get(key: string) {
-        // debugger
-        const v = this.cache.get(key);
-
-        if (v) {
-            // update the key to recently used.
-            this.cache.delete(key);
-            this.revCache.delete(v);
-            this.cache.set(key, v);
-            this.revCache.set(v, key);
-        }
-        return v;
-    }
-    revGet(value: string) {
-        // debugger
-        const key = this.revCache.get(value);
-        if (value) {
-            // update the key to recently used.
-            this.cache.delete(key);
-            this.revCache.delete(value);
-            this.cache.set(key, value);
-            this.revCache.set(value, key);
-        }
-        return key;
-    }
-    set(key: string, value: string) {
-        this.cache.set(key, value);
-        this.revCache.set(value, key);
-        if (this.cache.size > this.maxCache) {
-            for (const kv of this.cache) {
-                this.revCache.delete(kv[1]);
-                this.cache.delete(kv[0]);
-                if (this.cache.size <= this.maxCache) break;
-            }
-        }
-    }
-}
 
 const hashCaches = new LRUCache();
-
-// // putDBEntry:COPIED FROM obsidian-livesync
-// async function putDBEntry2(note: LoadedEntry, passphrase: string, database: PouchDB.Database<NewEntry | PlainEntry | Entry | EntryLeaf>) {
-//     let leftData = note.data;
-//     const savenNotes = [];
-//     let processed = 0;
-//     let made = 0;
-//     let skiped = 0;
-//     let pieceSize = MAX_DOC_SIZE_BIN;
-//     let plainSplit = false;
-//     let cacheUsed = 0;
-//     const userpasswordHash = h32Raw(new TextEncoder().encode(passphrase));
-//     if (isPlainText(note._id)) {
-//         pieceSize = MAX_DOC_SIZE;
-//         plainSplit = true;
-//     }
-//     const newLeafs: EntryLeaf[] = [];
-//     do {
-//         // To keep low bandwith and database size,
-//         // Dedup pieces on database.
-//         // from 0.1.10, for best performance. we use markdown delimiters
-//         // 1. \n[^\n]{longLineThreshold}[^\n]*\n -> long sentence shuld break.
-//         // 2. \n\n shold break
-//         // 3. \r\n\r\n should break
-//         // 4. \n# should break.
-//         let cPieceSize = pieceSize;
-//         if (plainSplit) {
-//             let minimumChunkSize = 20; //default
-//             if (minimumChunkSize < 10) minimumChunkSize = 10;
-//             let longLineThreshold = 250; //default
-//             if (longLineThreshold < 100) longLineThreshold = 100;
-//             cPieceSize = 0;
-//             // lookup for next splittion .
-//             // we're standing on "\n"
-//             do {
-//                 const n1 = leftData.indexOf("\n", cPieceSize + 1);
-//                 const n2 = leftData.indexOf("\n\n", cPieceSize + 1);
-//                 const n3 = leftData.indexOf("\r\n\r\n", cPieceSize + 1);
-//                 const n4 = leftData.indexOf("\n#", cPieceSize + 1);
-//                 if (n1 == -1 && n2 == -1 && n3 == -1 && n4 == -1) {
-//                     cPieceSize = MAX_DOC_SIZE;
-//                     break;
-//                 }
-
-//                 if (n1 > longLineThreshold) {
-//                     // long sentence is an established piece
-//                     cPieceSize = n1;
-//                 } else {
-//                     // cPieceSize = Math.min.apply([n2, n3, n4].filter((e) => e > 1));
-//                     // ^ heavy.
-//                     if (n1 > 0 && cPieceSize < n1) cPieceSize = n1;
-//                     if (n2 > 0 && cPieceSize < n2) cPieceSize = n2 + 1;
-//                     if (n3 > 0 && cPieceSize < n3) cPieceSize = n3 + 3;
-//                     // Choose shorter, empty line and \n#
-//                     if (n4 > 0 && cPieceSize > n4) cPieceSize = n4 + 0;
-//                     cPieceSize++;
-//                 }
-//             } while (cPieceSize < minimumChunkSize);
-//         }
-
-//         // piece size determined.
-//         const piece = leftData.substring(0, cPieceSize);
-//         leftData = leftData.substring(cPieceSize);
-//         processed++;
-//         let leafid = "";
-//         // Get hash of piece.
-//         let hashedPiece = "";
-//         if (typeof hashCache[piece] !== "undefined") {
-//             hashedPiece = "";
-//             leafid = hashCache[piece];
-//             skiped++;
-//             cacheUsed++;
-//         } else {
-//             if (passphrase != "") {
-//                 // When encryption has been enabled, make hash to be different between each passphrase to avoid inferring password.
-//                 hashedPiece = "+" + (h32Raw(new TextEncoder().encode(piece)) ^ userpasswordHash).toString(16);
-//             } else {
-//                 hashedPiece = h32(piece);
-//             }
-//             leafid = "h:" + hashedPiece;
-
-//             //have to make
-//             const savePiece = piece;
-
-//             const d: EntryLeaf = {
-//                 _id: leafid,
-//                 data: savePiece,
-//                 type: "leaf",
-//             };
-//             newLeafs.push(d);
-//             hashCache[piece] = leafid;
-//             hashCacheRev[leafid] = piece;
-//             made++;
-//         }
-//         savenNotes.push(leafid);
-//     } while (leftData != "");
-//     let saved = true;
-//     if (newLeafs.length > 0) {
-//         try {
-//             const result = await database.bulkDocs(newLeafs);
-//             for (const item of result) {
-//                 if ((item as any).ok) {
-//                     Logger(`save ok:id:${item.id} rev:${item.rev}`, LOG_LEVEL.VERBOSE);
-//                 } else {
-//                     if ((item as any).status && (item as any).status == 409) {
-//                         // conflicted, but it would be ok in childrens.
-//                     } else {
-//                         Logger(`save failed:id:${item.id} rev:${item.rev}`, LOG_LEVEL.NOTICE);
-//                         Logger(item);
-//                         // disposeHashCache();
-//                         saved = false;
-//                     }
-//                 }
-//             }
-//         } catch (ex) {
-//             Logger("ERROR ON SAVING LEAVES:", LOG_LEVEL.NOTICE);
-//             Logger(ex, LOG_LEVEL.NOTICE);
-//             saved = false;
-//         }
-//     }
-//     if (saved) {
-//         Logger(`note content saven, pieces:${processed} new:${made}, skip:${skiped}, cache:${cacheUsed}`);
-//         const newDoc: PlainEntry | NewEntry = {
-//             NewNote: true,
-//             children: savenNotes,
-//             _id: note._id,
-//             ctime: note.ctime,
-//             mtime: note.mtime,
-//             size: note.size,
-//             type: plainSplit ? "plain" : "newnote",
-//         };
-//         // Here for upsert logic,
-//         try {
-//             const old = await database.get(newDoc._id);
-//             if (!old.type || old.type == "notes" || old.type == "newnote" || old.type == "plain") {
-//                 // simple use rev for new doc
-//                 newDoc._rev = old._rev;
-//             }
-//         } catch (ex: any) {
-//             if (ex.status && ex.status == 404) {
-//                 // NO OP/
-//             } else {
-//                 throw ex;
-//             }
-//         }
-//         const ret = await database.put(newDoc, { force: true });
-//         Logger(`note saved:${newDoc._id}:${ret.rev}`);
-//         return ret;
-//     } else {
-//         Logger(`note coud not saved:${note._id}`);
-//     }
-// }
-
-async function putDBEntry(note: LoadedEntry, passphrase: string, database: PouchDB.Database<NewEntry | PlainEntry | Entry | EntryLeaf>) {
+async function putDBEntry(note: LoadedEntry, passphrase: string, saveAsBigChunk: boolean, database: PouchDB.Database<NewEntry | PlainEntry | EntryLeaf>) {
     // let leftData = note.data;
     const savenNotes = [];
     let processed = 0;
@@ -288,7 +94,7 @@ async function putDBEntry(note: LoadedEntry, passphrase: string, database: Pouch
     let plainSplit = false;
     let cacheUsed = 0;
     const userpasswordHash = h32Raw(new TextEncoder().encode(passphrase));
-    if (shouldSplitAsPlainText(note._id)) {
+    if (saveAsBigChunk && shouldSplitAsPlainText(note._id)) {
         pieceSize = MAX_DOC_SIZE;
         plainSplit = true;
     }
@@ -350,7 +156,7 @@ async function putDBEntry(note: LoadedEntry, passphrase: string, database: Pouch
                         leafid = nleafid;
                         tryNextHash = false;
                     }
-                } catch (ex) {
+                } catch (ex: any) {
                     if (ex.status && ex.status == 404) {
                         //not found, we can use it.
                         leafid = nleafid;
@@ -409,30 +215,29 @@ async function putDBEntry(note: LoadedEntry, passphrase: string, database: Pouch
     if (saved) {
         Logger(`note content saven, pieces:${processed} new:${made}, skip:${skiped}, cache:${cacheUsed}`);
         const newDoc: PlainEntry | NewEntry = {
-            NewNote: true,
             children: savenNotes,
             _id: note._id,
             ctime: note.ctime,
             mtime: note.mtime,
             size: note.size,
-            type: plainSplit ? "plain" : "newnote",
+            type: note.datatype,
         };
         // Here for upsert logic,
         return await runWithLock("file:" + newDoc._id, false, async () => {
             try {
-                const old = await database.get(newDoc._id);
+                const old = await database.get(newDoc._id) as EntryDoc;
                 if (!old.type || old.type == "notes" || old.type == "newnote" || old.type == "plain") {
                     // simple use rev for new doc
                     newDoc._rev = old._rev;
                 }
-            } catch (ex) {
+            } catch (ex: any) {
                 if (ex.status && ex.status == 404) {
                     // NO OP/
                 } else {
                     throw ex;
                 }
             }
-            const r = await database.put(newDoc, { force: true });
+            const r = await database.put<PlainEntry | NewEntry>(newDoc, { force: true });
             Logger(`note saved:${newDoc._id}:${r.rev}`);
             return r;
         });
@@ -452,6 +257,7 @@ async function eachProc(syncKey: string, config: eachConf) {
 
     const exportPath = config.local?.path ?? "";
     const processor = config.local?.processor ?? "";
+    const deleteMetadataOfDeletedFiles = config.deleteMetadataOfDeletedFiles ?? false;
 
     const remote = new PouchDB(serverURI, { auth: serverAuth });
     if (serverAuth.passphrase != "") {
@@ -482,7 +288,7 @@ async function eachProc(syncKey: string, config: eachConf) {
             .changes({
                 live: true,
                 include_docs: true,
-                style: "all_docs",
+                // style: "all_docs",
                 since: syncStat[syncKey],
                 filter: (doc, _) => {
                     return doc._id.startsWith(e.fromPrefix) && isVaildDoc(doc._id);
@@ -490,7 +296,7 @@ async function eachProc(syncKey: string, config: eachConf) {
             })
             .on("change", async function (change) {
                 if (change.doc?._id.indexOf(":") == -1 && change.doc?._id.startsWith(e.fromPrefix) && isVaildDoc(change.doc._id)) {
-                    let x = await transferDoc(e.syncKey, e.fromDB, change.doc, e.fromPrefix, e.passphrase, exportPath);
+                    let x = await transferDoc(e.syncKey, e.fromDB, change.doc, e.fromPrefix, e.passphrase, exportPath, deleteMetadataOfDeletedFiles);
                     if (x) {
                         syncStat[syncKey] = change.seq + "";
                         triggerSaveStat();
@@ -528,6 +334,7 @@ async function eachProc(syncKey: string, config: eachConf) {
         fromDB: remote,
         fromPrefix: serverPath,
         passphrase: serverAuth.passphrase,
+        deleteMetadataOfDeletedFiles: deleteMetadataOfDeletedFiles
     };
 
     function storagePathToVaultPath(strStoragePath: string) {
@@ -539,7 +346,7 @@ async function eachProc(syncKey: string, config: eachConf) {
         return filePath;
     }
 
-    const pushFile = async (pathSrc: string, stat: Stats) => {
+    const pushFile = async (pathSrc: string, stat: Stats, saveAsBigChunk: boolean) => {
         const id = serverPath + storagePathToVaultPath(pathSrc);
         const docId = id.startsWith("_") ? "/" + id : id;
         try {
@@ -575,9 +382,9 @@ async function eachProc(syncKey: string, config: eachConf) {
             size: stat.size,
             datatype: datatype,
             data: content,
-            // type: "plain",
+            type: datatype,
         };
-        let ret = await putDBEntry(newNote, conf.passphrase, remote as PouchDB.Database<NewEntry | PlainEntry | Entry | EntryLeaf>);
+        let ret = await putDBEntry(newNote, conf.passphrase, saveAsBigChunk, remote as PouchDB.Database<NewEntry | PlainEntry | EntryLeaf>);
         if (ret) {
             addTouchedFile(pathSrc, 0);
             addKnownFile(conf.syncKey, ret.id, ret.rev);
@@ -588,7 +395,12 @@ async function eachProc(syncKey: string, config: eachConf) {
         const docId = id.startsWith("_") ? "/" + id : id;
         try {
             let oldNote: any = await remote.get(docId);
-            oldNote._deleted = true;
+            if (deleteMetadataOfDeletedFiles) {
+                oldNote._deleted = true;
+            } else {
+                oldNote.deleted = true;
+                oldNote.mtime = Date.now();
+            }
             let ret = await remote.put(oldNote);
             addKnownFile(conf.syncKey, ret.id, ret.rev);
             addTouchedFile(pathSrc, 0);
@@ -608,11 +420,11 @@ async function eachProc(syncKey: string, config: eachConf) {
             return false;
         }
     }
-    async function pullFile(id: string, localPath: string) {
+    async function pullFile(id: string, localPath: string, deleteMetadataOfDeletedFiles: boolean) {
         let fromDoc = await remote.get(id);
         const docName = fromDoc._id.substring(serverPath.length);
         let sendDoc: PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta> & { children?: string[]; type?: string; mtime?: number } = { ...fromDoc, _id: docName.startsWith("_") ? "/" + docName : docName };
-        if (await exportDoc(sendDoc, docName, serverAuth.passphrase, remote, exportPath)) {
+        if (await exportDoc(sendDoc, docName, serverAuth.passphrase, remote, exportPath, deleteMetadataOfDeletedFiles)) {
             log(`Pull:${localPath}`);
         } else {
             log(`Failed:${localPath}`);
@@ -642,24 +454,24 @@ async function eachProc(syncKey: string, config: eachConf) {
 
                     if (diff == DATEDIFF_NEWER_A) {
                         log(`--> ${localPath}`);
-                        await pushFile(storageNewFilePath, stat);
+                        await pushFile(storageNewFilePath, stat, false);
                         // return;
                     } else if (diff == DATEDIFF_OLDER_A) {
                         log(`<-- ${localPath}`);
-                        await pullFile(doc._id, localPath);
+                        await pullFile(doc._id, localPath, deleteMetadataOfDeletedFiles);
                     } else {
                         log(`=== ${localPath}`);
                     }
                 } catch (ex: any) {
                     if (ex.code == "ENOENT") {
                         log(`<<- ${localPath}`);
-                        await pullFile(doc._id, localPath);
+                        await pullFile(doc._id, localPath, deleteMetadataOfDeletedFiles);
                         // return;
                         continue;
+                    } else {
+                        log(`Error on checking file:${localPath}`);
+                        log(`Error:${ex}`);
                     }
-
-                    log(`Error on checking file:${localPath}`);
-                    log(`Error:${ex}`);
                 }
             }
             log(`Done!`);
@@ -683,7 +495,7 @@ async function eachProc(syncKey: string, config: eachConf) {
         }
         log(`Detected:change:${filePath}`);
         addTouchedFile(pathSrc, mtime);
-        await pushFile(pathSrc, stat);
+        await pushFile(pathSrc, stat, false);
     });
     watcher.on("unlink", async (pathSrc: string, stat: Stats) => {
         const filePath = pathSrc;
@@ -704,7 +516,7 @@ async function eachProc(syncKey: string, config: eachConf) {
         }
         log(`Detected:created:${filePath}`);
         addTouchedFile(pathSrc, mtime);
-        await pushFile(pathSrc, stat);
+        await pushFile(pathSrc, stat, true);
 
         // watchVaultChange(path, stat);
     });
@@ -723,9 +535,9 @@ function isVaildDoc(id: string): boolean {
     return true;
 }
 
-async function exportDoc(sendDoc: TransferEntry, docName: string, passphrase: string, db: PouchDB.Database, exportPath: string) {
+async function exportDoc(sendDoc: TransferEntry, docName: string, passphrase: string, db: PouchDB.Database, exportPath: string, deleteMetadataOfDeletedFiles: boolean) {
     const writePath = path.join(exportPath, docName);
-    if (sendDoc._deleted) {
+    if (sendDoc._deleted || sendDoc.deleted) {
         log(`doc:${docName}: Deleted, so delete from ${writePath}`);
         try {
             addTouchedFile(writePath, 0);
@@ -751,9 +563,11 @@ async function exportDoc(sendDoc: TransferEntry, docName: string, passphrase: st
             log(`doc:${docName}: Up to date`);
             return true;
         }
-    } catch (ex) {
+    } catch (ex: any) {
         // WRAP IT
-        log(ex);
+        if (ex.code != "ENOENT") {
+            log(ex);
+        }
     }
     let cx = sendDoc.children;
     let children = await getChildren(cx, db);
@@ -799,7 +613,7 @@ async function exportDoc(sendDoc: TransferEntry, docName: string, passphrase: st
     log(`doc:${docName}: Exported`);
     return true;
 }
-async function transferDoc(syncKey: string, fromDB: PouchDB.Database, fromDoc: PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta>, fromPrefix: string, passphrase: string, exportPath: string): Promise<boolean> {
+async function transferDoc(syncKey: string, fromDB: PouchDB.Database, fromDoc: PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta>, fromPrefix: string, passphrase: string, exportPath: string, deleteMetadataOfDeletedFiles: boolean): Promise<boolean> {
     const docKey = `${syncKey}: ${fromDoc._id} (${fromDoc._rev})`;
     while (running[syncKey]) {
         await delay(100);
@@ -813,7 +627,7 @@ async function transferDoc(syncKey: string, fromDB: PouchDB.Database, fromDoc: P
         let continue_count = 3;
         try {
             const docName = fromDoc._id.substring(fromPrefix.length);
-            let sendDoc: PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta> & { children?: string[]; type?: string; mtime?: number } = { ...fromDoc, _id: docName.startsWith("_") ? "/" + docName : docName };
+            let sendDoc: PouchDB.Core.ExistingDocument<PouchDB.Core.ChangesMeta> & { children?: string[]; type?: string; mtime?: number, deleted?: boolean } = { ...fromDoc, _id: docName.startsWith("_") ? "/" + docName : docName };
             let retry = false;
             do {
                 if (retry) {
@@ -824,7 +638,7 @@ async function transferDoc(syncKey: string, fromDB: PouchDB.Database, fromDoc: P
                     }
                     await delay(1500);
                 }
-                retry = !(await exportDoc(sendDoc, docName, passphrase, fromDB, exportPath));
+                retry = !(await exportDoc(sendDoc, docName, passphrase, fromDB, exportPath, deleteMetadataOfDeletedFiles));
             } while (retry);
         } catch (ex) {
             log("Exception on transfer doc");
@@ -856,4 +670,4 @@ async function main() {
     }
 }
 
-main().then((_) => {});
+main().then((_) => { });

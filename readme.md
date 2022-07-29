@@ -4,6 +4,8 @@ The synchronization daemon between filesystem and CouchDB compatible with [Self-
 
 Notice: **We're on the bleeding edge.** Please make sure to back your vault up!
 
+Now compatible with Self-hosted LiveSync 0.13.0 or above.
+
 ## How to run
 
 ```sh
