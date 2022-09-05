@@ -8,7 +8,8 @@
                 "passphrase": "passphrase_of_private_vault"
             },
             "path": "shared/",
-            "initialScan": false
+            "initialScan": false,
+            "customChunkSize": 100
         },
         "local": {
             "path": "./vault",

@@ -84,13 +84,14 @@ function triggerProcessor(procs: string) {
 }
 
 const hashCaches = new LRUCache();
-async function putDBEntry(note: LoadedEntry, passphrase: string, saveAsBigChunk: boolean, database: PouchDB.Database<NewEntry | PlainEntry | EntryLeaf>) {
+async function putDBEntry(note: LoadedEntry, passphrase: string, saveAsBigChunk: boolean, customChunkSize: number, database: PouchDB.Database<NewEntry | PlainEntry | EntryLeaf>) {
     // let leftData = note.data;
     const savenNotes = [];
     let processed = 0;
     let made = 0;
     let skiped = 0;
-    let pieceSize = MAX_DOC_SIZE_BIN;
+    const maxChunkSize = MAX_DOC_SIZE_BIN * Math.max(customChunkSize, 1);
+    let pieceSize = maxChunkSize;
     let plainSplit = false;
     let cacheUsed = 0;
     const userpasswordHash = h32Raw(new TextEncoder().encode(passphrase));
@@ -99,22 +100,12 @@ async function putDBEntry(note: LoadedEntry, passphrase: string, saveAsBigChunk:
         plainSplit = true;
     }
 
+    const minimumChunkSize = Math.min(Math.max(40, ~~(note.data.length / 100)), maxChunkSize);
+    if (pieceSize < minimumChunkSize) pieceSize = minimumChunkSize;
+
     const newLeafs: EntryLeaf[] = [];
-    // To keep low bandwith and database size,
-    // Dedup pieces on database.
-    // from 0.1.10, for best performance. we use markdown delimiters
-    // 1. \n[^\n]{longLineThreshold}[^\n]*\n -> long sentence shuld break.
-    // 2. \n\n shold break
-    // 3. \r\n\r\n should break
-    // 4. \n# should break.
-    let minimumChunkSize = 20; //default
-    if (minimumChunkSize < 10) minimumChunkSize = 10;
-    let longLineThreshold = 250; //default
-    if (longLineThreshold < 100) longLineThreshold = 100;
 
-    //benchmarhk
-
-    const pieces = splitPieces2(note.data, pieceSize, plainSplit, minimumChunkSize, longLineThreshold);
+    const pieces = splitPieces2(note.data, pieceSize, plainSplit, minimumChunkSize, 0);
     for (const piece of pieces()) {
         processed++;
         let leafid = "";
@@ -258,6 +249,7 @@ async function eachProc(syncKey: string, config: eachConf) {
     const exportPath = config.local?.path ?? "";
     const processor = config.local?.processor ?? "";
     const deleteMetadataOfDeletedFiles = config.deleteMetadataOfDeletedFiles ?? false;
+    const customChunkSize = config.server.customChunkSize ?? 0;
 
     const remote = new PouchDB(serverURI, { auth: serverAuth });
     if (serverAuth.passphrase != "") {
@@ -334,7 +326,8 @@ async function eachProc(syncKey: string, config: eachConf) {
         fromDB: remote,
         fromPrefix: serverPath,
         passphrase: serverAuth.passphrase,
-        deleteMetadataOfDeletedFiles: deleteMetadataOfDeletedFiles
+        deleteMetadataOfDeletedFiles: deleteMetadataOfDeletedFiles,
+        customChunkSize: customChunkSize
     };
 
     function storagePathToVaultPath(strStoragePath: string) {
@@ -384,7 +377,7 @@ async function eachProc(syncKey: string, config: eachConf) {
             data: content,
             type: datatype,
         };
-        let ret = await putDBEntry(newNote, conf.passphrase, saveAsBigChunk, remote as PouchDB.Database<NewEntry | PlainEntry | EntryLeaf>);
+        let ret = await putDBEntry(newNote, conf.passphrase, saveAsBigChunk, customChunkSize, remote as PouchDB.Database<NewEntry | PlainEntry | EntryLeaf>);
         if (ret) {
             addTouchedFile(pathSrc, 0);
             addKnownFile(conf.syncKey, ret.id, ret.rev);

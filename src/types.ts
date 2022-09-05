@@ -15,6 +15,7 @@ export interface config {
     };
     path: string;
     initialScan: boolean;
+    customChunkSize?: number;
 
 }
 export interface localConfig {
@@ -40,6 +41,7 @@ export interface connectConfig {
     fromPrefix: string;
     passphrase: string;
     deleteMetadataOfDeletedFiles: boolean;
+    customChunkSize: number;
 }
 
 
