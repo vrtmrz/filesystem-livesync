@@ -95,7 +95,7 @@ async function putDBEntry(note: LoadedEntry, passphrase: string, saveAsBigChunk:
     let plainSplit = false;
     let cacheUsed = 0;
     const userpasswordHash = h32Raw(new TextEncoder().encode(passphrase));
-    if (saveAsBigChunk && shouldSplitAsPlainText(note._id)) {
+    if (!saveAsBigChunk && shouldSplitAsPlainText(note._id)) {
         pieceSize = MAX_DOC_SIZE;
         plainSplit = true;
     }
