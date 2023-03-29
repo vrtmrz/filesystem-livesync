@@ -82,7 +82,10 @@ async function runEngine() {
             log(`Failed! Reason:${result.reason}`);
         } else {
             log(`OK: stdout:${result.value.stdout}`);
-            log(`OK: stderr:${result.value.stderr}`);
+            const stderr = result.value.stderr;
+            if (stderr !== "") {
+                log(`OK: stderr:${stderr}`);
+            }
         }
     }
 }
@@ -369,6 +372,7 @@ async function eachProc(syncKey: string, config: eachConf) {
         while (running[syncKey]) {
             await delay(100);
         }
+        let result = true;
         try {
             running[syncKey] = true;
             if (isKnownFile(syncKey, fromDoc._id, fromDoc._rev)) {
@@ -395,11 +399,12 @@ async function eachProc(syncKey: string, config: eachConf) {
             } catch (ex) {
                 log("Exception on transfer doc");
                 log(ex);
+                result = false;
             }
         } finally {
             running[syncKey] = false;
         }
-        return false;
+        return result;
     }
 
     if (config.sync_on_connect || config.server.initialScan) {
