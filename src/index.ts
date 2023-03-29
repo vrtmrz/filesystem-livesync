@@ -369,6 +369,7 @@ async function eachProc(syncKey: string, config: eachConf) {
         while (running[syncKey]) {
             await delay(100);
         }
+        let result = true;
         try {
             running[syncKey] = true;
             if (isKnownFile(syncKey, fromDoc._id, fromDoc._rev)) {
@@ -395,11 +396,12 @@ async function eachProc(syncKey: string, config: eachConf) {
             } catch (ex) {
                 log("Exception on transfer doc");
                 log(ex);
+                result = false;
             }
         } finally {
             running[syncKey] = false;
         }
-        return false;
+        return result;
     }
 
     if (config.sync_on_connect || config.server.initialScan) {
