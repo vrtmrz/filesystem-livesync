@@ -82,7 +82,10 @@ async function runEngine() {
             log(`Failed! Reason:${result.reason}`);
         } else {
             log(`OK: stdout:${result.value.stdout}`);
-            log(`OK: stderr:${result.value.stderr}`);
+            const stderr = result.value.stderr;
+            if (stderr !== "") {
+                log(`OK: stderr:${stderr}`);
+            }
         }
     }
 }
